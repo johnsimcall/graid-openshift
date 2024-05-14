@@ -1,0 +1,54 @@
+---
+apiVersion: kmm.sigs.x-k8s.io/v1beta1
+kind: Module
+metadata:
+  name: lustre
+spec:
+  moduleLoader:
+    container:
+      modprobe:
+        moduleName: lustre
+
+      kernelMappings:
+        - literal: 4.18.0-372.36.1.el8_6.x86_64
+          containerImage: image-registry.openshift-image-registry.svc:5000/lustre/lustre:4.18.0
+          build:
+            dockerfileConfigMap:
+              name: build-module
+
+  selector:
+    feature.kmm.lustre: 'true'
+---
+apiVersion: kmm.sigs.x-k8s.io/v1beta1
+kind: Module
+metadata:
+  name: ksocklnd
+spec:
+  moduleLoader:
+    container:
+      modprobe:
+        moduleName: ksocklnd
+
+      kernelMappings:
+        - literal: 4.18.0-372.36.1.el8_6.x86_64
+          containerImage: image-registry.openshift-image-registry.svc:5000/lustre/lustre:4.18.0
+
+  selector:
+    feature.kmm.lustre: 'true'
+---
+apiVersion: kmm.sigs.x-k8s.io/v1beta1
+kind: Module
+metadata:
+  name: mgc
+spec:
+  moduleLoader:
+    container:
+      modprobe:
+        moduleName: mgc
+
+      kernelMappings:
+        - literal: 4.18.0-372.36.1.el8_6.x86_64
+          containerImage: image-registry.openshift-image-registry.svc:5000/lustre/lustre:4.18.0
+
+  selector:
+    feature.kmm.lustre: 'true'
