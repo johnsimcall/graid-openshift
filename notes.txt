@@ -1,3 +1,47 @@
+The graid-preinstaller and graid-installer files were never intended to be built in a container.
+The error messages are:
+
+sh-5.1# ./graid-pre-installer.run --yes
+This system is not registered with an entitlement server. You can use subscription-manager to register.
+
+
+sh-5.1# ./graid-installer.run --accept-license
+Extracting installer files, please wait a few seconds ...
+Extracting installer files done.
+
+Starting installer ...
+Verifying...                          ################################# [100%]
+Preparing...                          ################################# [100%]
+Can't locate syscall.ph in @INC (did you run h2ph?) (@INC contains: /usr/local/lib64/perl5/5.32 /usr/local/share/perl5/5.32 /usr/lib64/perl5/vendor_perl /usr/share/perl5/vendor_perl /usr/lib64/perl5 /usr/share/perl5) at -e line 2.
+/var/tmp/rpm-tmp.efsUqg: line 118: /proc//fd/: Is a directory
+kill: usage: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]
+
+DKMS status:
+
+
+NVIDIA Driver:
+  Installed Version: 
+  Running Version: 550.54.14
+
+System:
+  Distro: rhel
+  Kernel: 5.14.0-284.64.1.el9_2.x86_64
+
+Error Messages:
+Can not find NVIDIA Driver which managed by dkms.
+Running NVIDIA driver version mismatch
+Upgrade check failed
+
+error: %prein(graid-sr-1.5.0-703.g0f676127.000.el8.el8.x86_64) scriptlet failed, exit status 1
+error: graid-sr-1.5.0-703.g0f676127.000.el8.el8.x86_64: install failed
+modprobe: FATAL: Module graid not found in directory /lib/modules/5.14.0-284.64.1.el9_2.x86_64
+Install SupremeRAID™ Driver failed.
+sh-5.1# 
+
+
+
+
+
 The graid RPM, extracted from the graid-installer.run, is not cleaned up after a failed install.
 You can find the RPM by looking in the `/tmp/graid-installer/model-000` director
 
