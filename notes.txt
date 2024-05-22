@@ -4,6 +4,22 @@ You can find the RPM by looking in the `/tmp/graid-installer/model-000` director
 I extracted the pre-install and post-install scripts from that RPM via 
 rpm -q -p ./graid-sr-1.5.0-703.g0f676127.000.el9.1.x86_64.rpm --scripts
 
+The RPM has an additional embedded "payload"
+
+# grep -i payload graid-rpm-scripts.sh
+# Run payload binary for checking upgrade compatibility
+run_payload() {
+	sed "1,/^\#\#\/\*\*__PAYLOAD_BEGINS__\*\*\/\#\#$/ d" $0 | base64 -d | gzip -d -c > ${memfd}
+	PAYLOAD_RC=$?
+run_payload
+if (( PAYLOAD_RC != 0 )); then
+##/**__PAYLOAD_BEGINS__**/##
+
+
+
+
+
+
 ### preinstall scriptlet (using /bin/sh):
 #!/bin/bash
 
