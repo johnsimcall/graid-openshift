@@ -1,0 +1,217 @@
+The graid RPM, extracted from the graid-installer.run, is not cleaned up after a failed install.
+You can find the RPM by looking in the `/tmp/graid-installer/model-000` director
+
+I extracted the pre-install and post-install scripts from that RPM via 
+rpm -q -p ./graid-sr-1.5.0-703.g0f676127.000.el9.1.x86_64.rpm --scripts
+
+### preinstall scriptlet (using /bin/sh):
+#!/bin/bash
+
+modprobe nvme || { echo "Failed to load nvme module!!!"; exit 1; }
+
+wrong_msgs=""
+
+if [[ -z ${KVER} ]]; then
+	KVER=$(uname -r)
+fi
+
+TMPFILE=$(mktemp)
+dkms status | grep -E '^nvidia[,/]' 2>/dev/null > ${TMPFILE}
+
+while read -r DKMS_STATUS
+do
+	if [[ ${DKMS_STATUS} =~ ^nvidia[,/]\ *([.0-9]+),\ ([^,]+),\ ([0-9a-z_]+):\ ([a-z]+)\ *(.*) ]]; then
+		if [[ "${BASH_REMATCH[2]}" == "${KVER}" && ${BASH_REMATCH[4]} == "installed" ]]; then
+			VERSION=${BASH_REMATCH[1]}
+			ARCH=${BASH_REMATCH[3]}
+			STAT=${BASH_REMATCH[4]}
+			if [[ -n ${BASH_REMATCH[5]} ]]; then
+				if [[ ${BASH_REMATCH[5]} == "(WARNING! Diff between built and installed module!)" ]]; then
+					CHK_DIFF=1
+				else
+					# (WARNING! Missing some built modules!)
+					wrong_msgs+="${BASH_REMATCH[5]}\n"
+				fi
+			fi
+			break
+		fi
+	fi
+done < ${TMPFILE}
+rm -f ${TMPFILE}
+
+if [[ -z ${VERSION} ]]; then
+	wrong_msgs+="Can not find NVIDIA Driver which managed by dkms.\n"
+else
+	if [[ ${ARCH} != "x86_64" && ${ARCH} != "aarch64" ]]; then
+		wrong_msgs+="Unsupported arch ${ARCH}\n"
+	fi
+
+	SOURCE_DIR="/var/lib/dkms/nvidia/${VERSION}/source"
+	if ! [[ -d ${SOURCE_DIR} ]]; then
+		wrong_msgs+="Can not find nvidia driver dkms source directory\n"
+	fi
+
+	if [[ ${CHK_DIFF} ]]; then
+		dkms_owned=/var/lib/dkms/nvidia/kernel-${KVER}-${ARCH}/module
+		kernel_installed=/lib/modules/${KVER}/extra
+		if ! [[ -d $dkms_owned ]]; then
+			wrong_msgs+="NVIDIA module dkms owned path not found: $dkms_owned\n"
+		fi
+		if ! [[ -d $kernel_installed ]]; then
+			wrong_msgs+="NVIDIA module kernel installed path not found: $kernel_installed\n"
+		fi
+		if [[ -d $dkms_owned && -d $kernel_installed ]]; then
+			for i in $dkms_owned/*
+			do
+				module_name=${i/$dkms_owned\//}
+				if ! [[ -f $kernel_installed/$module_name ]]; then
+					wrong_msgs+="$module_name not found in $kernel_installed\n"
+				else
+					diff $i $kernel_installed/$module_name  >/dev/null || wrong_msgs+="$module_name: diff between built and installed module!\n"
+				fi
+			done
+		fi
+	fi
+fi
+
+# NVIDIA version
+if [ -f /sys/module/nvidia/version ]; then
+	NV_DRIVER_VER=$(cat /sys/module/nvidia/version)
+	if [[ "${NV_DRIVER_VER}" != "${VERSION}" ]]; then
+		wrong_msgs+="Running NVIDIA driver version mismatch\n"
+	fi
+else
+	wrong_msgs+="NVIDIA driver not loaded\n"
+fi
+
+# check Kernel Options
+if [[ ${ARCH} == "x86_64" ]]; then
+	# check iommu=pt
+	if ! grep -q "iommu=pt" /proc/cmdline; then
+		wrong_msgs+="Can not find kernel params iommu=pt\n"
+	fi
+
+	if  [ -f /sys/module/nvme_core/parameters/multipath ]; then
+		# check nvme_core.multipath=Y
+		if ! grep -q "Y" /sys/module/nvme_core/parameters/multipath; then
+			wrong_msgs+="Can not find kernel params nvme_core.multipath=Y\n"
+		fi
+	fi
+fi
+
+mkdir -p /var/log/graid/
+
+# Run payload binary for checking upgrade compatibility
+unset POSIXLY_CORRECT
+run_payload() {
+	read -r pid mfd < <(perl -e '
+		require qw/syscall.ph/;
+
+		# Create memfd
+		my $name = "";
+		my $fd = syscall(SYS_memfd_create(), $fn, 0);
+		if (-1 == $fd) { die "memfd_create: $!"; }
+
+		$pid = fork();
+		if ( $pid == 0 ) {
+			sleep();
+		}
+
+		print "$pid $fd\n";
+		select()->flush();
+	')
+	memfd=/proc/$pid/fd/$mfd
+
+	sed "1,/^\#\#\/\*\*__PAYLOAD_BEGINS__\*\*\/\#\#$/ d" $0 | base64 -d | gzip -d -c > ${memfd}
+
+	${memfd} >> /var/log/graid/upgrade_check.log 2>&1
+	PAYLOAD_RC=$?
+
+	kill ${pid}
+}
+run_payload
+if (( PAYLOAD_RC != 0 )); then
+	wrong_msgs+="Upgrade check failed\n"
+fi
+
+# collect wrong msgs
+if [[ -n "${wrong_msgs}" ]]; then
+	# dump infos
+	echo "
+DKMS status:
+$(dkms status | grep -E '^nvidia' 2>/dev/null)
+
+NVIDIA Driver:
+  Installed Version: $VERSION
+  Running Version: $NV_DRIVER_VER
+
+System:
+  Distro: $(cat /etc/os-release | grep "^ID=" | awk -F"=" '{print $2}' | tr '[:upper:]' '[:lower:]' | cut -d"\"" -f2)
+  Kernel: $KVER"
+	echo -e "
+Error Messages:
+$wrong_msgs"
+	exit 1
+fi
+
+# cleanup led_conf
+if [ -d /usr/share/graid/led_conf/ ]; then
+    rm -rf  /usr/share/graid/led_conf/
+	echo "Cleanup led_conf"
+fi
+
+# NVIDA dirver version under 470
+FILE="${SOURCE_DIR}/nvidia/os-mlock.c"
+if ! [[ -f ${FILE} ]]; then
+	echo "Can not find file to patch"
+	exit 1
+fi
+
+if ! grep -q -F "if ((*pte_array)[i] != ((*pte_array)[i-1] + PAGE_SIZE))" ${FILE}; then
+	echo "No need to patch"
+	exit 0
+fi
+
+sed -i 's/if ((\*pte_array)\[i\] != ((\*pte_array)\[i-1\] + PAGE_SIZE))/if ((NvU64)pte_array\[i\] != (((NvU64)pte_array\[i-1\]) + PAGE_SIZE))/' ${FILE}
+
+if ! grep -q -F "if ((NvU64)pte_array[i] != (((NvU64)pte_array[i-1]) + PAGE_SIZE))" ${FILE}; then
+	echo "Failed to patch"
+	exit 1
+fi
+
+dkms remove nvidia/${VERSION} -k ${KVER} || exit 1
+
+retry=0
+while lsmod | grep nvidia; do
+	rmmod graid >& /dev/null
+	rmmod nvidia-modeset >& /dev/null
+	rmmod nvidia-drm >& /dev/null
+	rmmod nvidia-uvm >& /dev/null
+	rmmod nvidia >& /dev/null
+	(( retry = retry + 1))
+	if (( retry > 5 )); then
+		break
+	fi
+done
+
+if lsmod | grep nvidia; then
+	echo "Unable to remove nvidia kernel modules, need to reboot after path"
+fi
+
+dkms install nvidia/${VERSION} -k ${KVER} || exit 1
+
+exit
+
+
+### postinstall scriptlet (using /bin/sh):
+#!/bin/bash
+VERSION="1.5.0"
+dkms add graid/$VERSION
+dkms build graid/$VERSION
+dkms install graid/$VERSION
+modprobe graid
+modprobe graid-nvidia
+systemctl enable graid
+systemctl daemon-reload
+systemctl start graid
+preuninstall scriptlet (using /bin/sh):
